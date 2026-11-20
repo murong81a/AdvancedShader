@@ -8,10 +8,10 @@ import advancedshader.core.patcher.Patcher.Patch;
 @Patch("net.minecraftforge.client.MinecraftForgeClient")
 public class MinecraftForgeClientPatcher extends Patcher {
 
-    @MethodPatch("getRenderLayer()Lamm;")
+    @MethodPatch("getRenderLayer()Lahv;")
     public void getRenderLayer(MethodNode method) {
         patch("TRIPWIRE兼容其他模组", method,
-                inject(ByteCode.InvokeStatic(FORWARDFEATURES, "getRenderLayer", "(Lamm;)Lamm;")),
+                inject(ByteCode.InvokeStatic(FORWARDFEATURES, "getRenderLayer", "(Lahv;)Lahv;")),
                 ByteCode.AReturn());
     }
 }

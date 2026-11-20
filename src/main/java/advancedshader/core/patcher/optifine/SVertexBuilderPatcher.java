@@ -10,46 +10,46 @@ import advancedshader.core.patcher.Patcher.Patch;
 @Patch("net.optifine.shaders.SVertexBuilder")
 public class SVertexBuilderPatcher extends Patcher {
 
-    @MethodPatch("drawArrays(IIILbuk;)V")
+    @MethodPatch("drawArrays(IIILbnt;)V")
     public void drawArrays(MethodNode method) {
         LabelNode singleTexture = ByteCode.Label();
         LabelNode drawEnd = ByteCode.Label();
 
         patch("增加调用drawMultiTexture判断", method,
                 inject(ByteCode.ALoad(3)),
-                inject(ByteCode.InvokeVirtual("buk", "isMultiTexture", "()Z")),
+                inject(ByteCode.InvokeVirtual("bnt", "isMultiTexture", "()Z")),
                 inject(ByteCode.IfZero(singleTexture)),
                 inject(ByteCode.ALoad(3)),
-                inject(ByteCode.InvokeVirtual("buk", "drawMultiTexture", "()V")),
+                inject(ByteCode.InvokeVirtual("bnt", "drawMultiTexture", "()V")),
                 inject(ByteCode.Goto(drawEnd)),
                 inject(singleTexture),
                 ByteCode.ILoad(0),
                 ByteCode.ILoad(1),
                 ByteCode.ILoad(2),
-                ByteCode.InvokeStatic("bus", "f", "(III)V"),
+                ByteCode.InvokeStatic("bob", "f", "(III)V"),
                 inject(drawEnd));
 
         // 第一部分也许是不必要的，但万一呢……？
         patch("增加gbuffers_line着色器 第一部分", method,
                 inject(ByteCode.ILoad(0)),
                 inject(ByteCode.ALoad(3)),
-                inject(ByteCode.InvokeStatic(LINESHADER, "preDrawArray", "(ILbuk;)I")),
+                inject(ByteCode.InvokeStatic(LINESHADER, "preDrawArray", "(ILbnt;)I")),
                 inject(ByteCode.IStore(0)),
                 ByteCode.ILoad(0),
                 ByteCode.ILoad(1),
                 ByteCode.ILoad(2),
-                ByteCode.InvokeStatic("bus", "f", "(III)V"),
+                ByteCode.InvokeStatic("bob", "f", "(III)V"),
                 inject(ByteCode.InvokeStatic(LINESHADER, "postDrawArray", "()V")));
 
         patch("增加gbuffers_line着色器 第二部分", method,
                 inject(ByteCode.ILoad(0)),
                 inject(ByteCode.ALoad(3)),
-                inject(ByteCode.InvokeStatic(LINESHADER, "preDrawArray", "(ILbuk;)I")),
+                inject(ByteCode.InvokeStatic(LINESHADER, "preDrawArray", "(ILbnt;)I")),
                 inject(ByteCode.IStore(0)),
                 ByteCode.ILoad(0),
                 ByteCode.ILoad(1),
                 ByteCode.ILoad(2),
-                ByteCode.InvokeStatic("bus", "f", "(III)V"),
+                ByteCode.InvokeStatic("bob", "f", "(III)V"),
                 inject(ByteCode.InvokeStatic(LINESHADER, "postDrawArray", "()V")),
                 ByteCode.Label(),
                 ByteCode.LineNumber(),
@@ -88,7 +88,7 @@ public class SVertexBuilderPatcher extends Patcher {
                 inject(ByteCode.InvokeStatic("org/lwjgl/opengl/GL20", "glDisableVertexAttribArray", "(I)V")));
     }
 
-    @MethodPatch("pushEntity(Lawt;Let;Lamy;Lbuk;)V")
+    @MethodPatch("pushEntity(Lars;Lcm;Laih;Lbnt;)V")
     public void pushEntity(MethodNode method) {
         patch("修复block.properties无法正确匹配方块问题", method,
                 remove(ByteCode.ILoad(4)),
@@ -97,7 +97,7 @@ public class SVertexBuilderPatcher extends Patcher {
                 inject(ByteCode.ALoad(0)),
                 inject(ByteCode.ALoad(1)),
                 inject(ByteCode.ALoad(2)),
-                inject(ByteCode.InvokeStatic(BLOCKALIASFIX, "getBlockAliasId", "(Lawt;Let;Lamy;)I")),
+                inject(ByteCode.InvokeStatic(BLOCKALIASFIX, "getBlockAliasId", "(Lars;Lcm;Laih;)I")),
                 ByteCode.IStore(7),
                 ByteCode.Label(),
                 ByteCode.LineNumber(),

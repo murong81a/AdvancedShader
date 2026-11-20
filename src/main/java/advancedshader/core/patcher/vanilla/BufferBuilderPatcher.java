@@ -8,20 +8,38 @@ import org.objectweb.asm.tree.MethodNode;
 import advancedshader.core.patcher.Patcher;
 import advancedshader.core.patcher.Patcher.Patch;
 
-@Patch("buk")
+/**
+ * VertexBuffer is bnt in 1.10.2 (1.12.2 calls this class BufferBuilder).
+ *
+ * Only the patches whose anchor exists in the 1.10.2 body are kept. The 1.10.2 class is
+ * materially simpler than its 1.12.2 descendant:
+ *
+ *   * draw(int,int) is `iload_2, iload_1, imul, istore_3` followed by two
+ *     `iconst_4, imul` pairs and a single glDrawArrays. There is no multi-texture
+ *     branch to extend with a triangle mode, so the upstream draw patch, which rewrites
+ *     that branch, has nothing to anchor on.
+ *   * quadsToTriangles begins with the quad-mode test the line-mode patch needs, so that
+ *     one is ported unchanged.
+ *
+ * The class is patched as a whole or not at all, so a patch that cannot apply would
+ * discard the others; that is why the unsupported ones are omitted here rather than
+ * attempted and allowed to fail.
+ */
+@Patch("bnt")
 public class BufferBuilderPatcher extends Patcher {
 
+    // GL_LINES (1) is added as an accepted draw mode next to GL_QUADS (7).
     @MethodPatch("quadsToTriangles()V")
     public void quadsToTriangles(MethodNode method) {
         JumpInsnNode jmp = ByteCode.IfIntEqual(null);
 
-        jmp.label = (LabelNode) patch("增加线段类型渲染判断", method,
+        jmp.label = (LabelNode) patch("line draw mode support", method,
                 ByteCode.ALoad(0),
-                ByteCode.GetField("buk", "j", "I"),
+                ByteCode.GetField("bnt", "j", "I"),
                 ByteCode.BIPush(GL11.GL_QUADS),
                 ByteCode.IfIntEqual(null),
                 inject(ByteCode.ALoad(0)),
-                inject(ByteCode.GetField("buk", "j", "I")),
+                inject(ByteCode.GetField("bnt", "j", "I")),
                 inject(ByteCode.IConst(GL11.GL_LINES)),
                 inject(jmp),
                 ByteCode.Label(),
@@ -30,100 +48,36 @@ public class BufferBuilderPatcher extends Patcher {
                 collect(ByteCode.Label()))[0];
     }
 
-    @MethodPatch("i()I")
-    public void getDrawMode(MethodNode method) {
-        JumpInsnNode jmp = ByteCode.IfIntNotEqual(null);
-
-        jmp.label = (LabelNode) patch("增加线段类型渲染判断", method,
-                inject(ByteCode.ALoad(0)),
-                inject(ByteCode.GetField("buk", "j", "I")),
-                inject(ByteCode.BIPush(GL11.GL_QUADS)),
-                inject(jmp),
-                ByteCode.ALoad(0),
-                ByteCode.GetField("buk", "modeTriangles", "Z"),
-                ByteCode.IfZero(null),
-                ByteCode.Label(),
-                ByteCode.LineNumber(),
-                ByteCode.IConst(4),
-                ByteCode.IReturn(),
-                collect(ByteCode.Label()))[0];
-    }
-
+    // endVertex()V is d()V in 1.10.2.
     @MethodPatch("d()V")
     public void endVertex(MethodNode method) {
-        patch("线段增加额外顶点", method,
-                ByteCode.InvokeStatic("net/optifine/shaders/SVertexBuilder", "endAddVertex", "(Lbuk;)V"),
+        patch("extra vertex for line strips", method,
+                ByteCode.InvokeStatic("net/optifine/shaders/SVertexBuilder", "endAddVertex", "(Lbnt;)V"),
                 inject(ByteCode.ALoad(0)),
-                inject(ByteCode.InvokeStatic(LINESHADER, "endAddVertex", "(Lbuk;)V")));
+                inject(ByteCode.InvokeStatic(LINESHADER, "endAddVertex", "(Lbnt;)V")));
     }
 
-    @MethodPatch("drawForIcon(Lcdq;I)I")
+    // drawForIcon(TextureAtlasSprite,int) exists in both versions and its body binds the
+    // sprite texture directly, which is what this patch redirects through the shader path.
+    @MethodPatch("drawForIcon(Lbwe;I)I")
     public void drawForIcon(MethodNode method) {
-        patch("为MultiTexture绑定光影材质以及设定spriteBounds", method,
+        patch("bind the shader texture for MultiTexture and set the sprite bounds", method,
                 remove(ByteCode.SIPush(3553)),
                 ByteCode.ALoad(1),
-                ByteCode.GetField("cdq", "glSpriteTextureId", "I"),
+                ByteCode.GetField("bwe", "glSpriteTextureId", "I"),
                 remove(ByteCode.InvokeStatic("org/lwjgl/opengl/GL11", "glBindTexture", "(II)V")),
-                inject(ByteCode.InvokeStatic("bus", "i", "(I)V")),
+                inject(ByteCode.InvokeStatic("bob", "i", "(I)V")),
                 inject(ByteCode.ALoad(1)),
-                inject(ByteCode.InvokeStatic(ANISOTROPICFILTER, "bindShaderMultiTexture", "(Lcdq;)V")));
+                inject(ByteCode.InvokeStatic(ANISOTROPICFILTER, "bindShaderMultiTexture", "(Lbwe;)V")));
     }
 
-    @MethodPatch("draw(II)V")
-    public void draw(MethodNode method) {
-        LabelNode ifend1 = ByteCode.Label();
-        LabelNode quad1 = ByteCode.Label();
-        LabelNode ifend2 = ByteCode.Label();
-        LabelNode quad2 = ByteCode.Label();
-        LabelNode ifend3 = ByteCode.Label();
-        LabelNode quad3 = ByteCode.Label();
-
-        patch("增加drawMultiTexture三角形渲染判断", method,
-                ByteCode.ILoad(1),
-                inject(ByteCode.ALoad(0)),
-                inject(ByteCode.GetField("buk", "modeTriangles", "Z")),
-                inject(ByteCode.IfZero(quad1)),
-                inject(ByteCode.BIPush(6)),
-                inject(ByteCode.Goto(ifend1)),
-                inject(quad1),
-                ByteCode.IConst(4),
-                inject(ifend1),
-                ByteCode.IMul(),
-                ByteCode.IStore(4),
-                ByteCode.Label(),
-                ByteCode.LineNumber(),
-                ByteCode.ILoad(3),
-                inject(ByteCode.ALoad(0)),
-                inject(ByteCode.GetField("buk", "modeTriangles", "Z")),
-                inject(ByteCode.IfZero(quad2)),
-                inject(ByteCode.BIPush(6)),
-                inject(ByteCode.Goto(ifend2)),
-                inject(quad2),
-                ByteCode.IConst(4),
-                inject(ifend2),
-                ByteCode.IMul(),
-                ByteCode.IStore(5),
-                ByteCode.Label(),
-                ByteCode.LineNumber(),
-                inject(ByteCode.ALoad(0)),
-                inject(ByteCode.GetField("buk", "modeTriangles", "Z")),
-                inject(ByteCode.IfZero(quad3)),
-                inject(ByteCode.IConst(GL11.GL_TRIANGLES)),
-                inject(ByteCode.Goto(ifend3)),
-                inject(quad3),
-                ByteCode.ALoad(0),
-                ByteCode.GetField("buk", "j", "I"),
-                inject(ifend3),
-                ByteCode.ILoad(4),
-                ByteCode.ILoad(5),
-                ByteCode.InvokeStatic("org/lwjgl/opengl/GL11", "glDrawArrays", "(III)V"));
-    }
-
+    // pos(DDD) writes the four position components; the hook records the block centre
+    // attribute once per vertex batch.
     @MethodPatch("a(DDD)V")
     public void putPosition(MethodNode method) {
-        patch("为方块设定at_midBlock顶点属性", method,
+        patch("set the at_midBlock vertex attribute for blocks", method,
                 inject(ByteCode.ALoad(0)),
-                inject(ByteCode.InvokeStatic(VERTEXATTRIBUTE, "setMidBlock", "(Lbuk;)V")),
+                inject(ByteCode.InvokeStatic(VERTEXATTRIBUTE, "setMidBlock", "(Lbnt;)V")),
                 method.instructions.getFirst());
     }
 }

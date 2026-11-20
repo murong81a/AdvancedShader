@@ -1,142 +1,33 @@
 package advancedshader.core.patcher.optifine;
 
-import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.MethodNode;
 
 import advancedshader.core.patcher.Patcher;
 import advancedshader.core.patcher.Patcher.Patch;
 
+/**
+ * net.optifine.shaders.gui.GuiShaders, not patched.
+ *
+ * Two upstream patches targeted this class: one appended buttons for the forward
+ * compatible options in updateButtons, the other forwarded button clicks in
+ * actionPerformed. Both were written against G5's layout.
+ *
+ * In H5 the actionPerformed body starts by testing GuiButton.enabled and instanceof
+ * GuiButtonEnumShaderOption, then dispatches on the button id through a table switch,
+ * and updateButtons reads the inherited public buttonList rather than the private field
+ * the 1.12.2 patch expects. Neither anchor survives translation, and both patches only
+ * affect the shader selection screen: the options they add can be set in
+ * optionsshaders.txt, and the screen itself works without them.
+ *
+ * This class is therefore left alone rather than given a guessed-at rewrite. Note that the
+ * hooks it would call (ForwardFeatures.actionPerformed and getButtonText) still exist and
+ * are still used by GuiButtonEnumShaderOptionPatcher, so nothing is left dangling.
+ */
 @Patch("net.optifine.shaders.gui.GuiShaders")
 public class GuiShadersPatcher extends Patcher {
 
-    @MethodPatch("b()V")
-    public void initGui(MethodNode method) {
-        patch("增加模拟高版本特性相关选项", method,
-                ByteCode.ALoad(0),
-                ByteCode.GetField("net/optifine/shaders/gui/GuiShaders", "n", "Ljava/util/List;"),
-                ByteCode.New("net/optifine/shaders/gui/GuiButtonEnumShaderOption"),
-                ByteCode.Dup(),
-                ByteCode.GetStatic("net/optifine/shaders/config/EnumShaderOption", "OLD_LIGHTING", "Lnet/optifine/shaders/config/EnumShaderOption;"),
-                ByteCode.ILoad(3),
-                ByteCode.BIPush(7),
-                ByteCode.ILoad(5),
-                ByteCode.IMul(),
-                ByteCode.ILoad(4),
-                ByteCode.IAdd(),
-                ByteCode.ILoad(1),
-                ByteCode.ILoad(2),
-                ByteCode.InvokeSpecial("net/optifine/shaders/gui/GuiButtonEnumShaderOption", "<init>", "(Lnet/optifine/shaders/config/EnumShaderOption;IIII)V"),
-                ByteCode.InvokeInterface("java/util/List", "add", "(Ljava/lang/Object;)Z"),
-                ByteCode.Pop(),
-                inject(ByteCode.ALoad(0)),
-                inject(ByteCode.GetField("net/optifine/shaders/gui/GuiShaders", "n", "Ljava/util/List;")),
-                inject(ByteCode.New("net/optifine/shaders/gui/GuiButtonEnumShaderOption")),
-                inject(ByteCode.Dup()),
-                inject(ByteCode.Ldc("RENDERER")),
-                inject(ByteCode.InvokeStatic("net/optifine/shaders/config/EnumShaderOption", "valueOf", "(Ljava/lang/String;)Lnet/optifine/shaders/config/EnumShaderOption;")),
-                inject(ByteCode.ILoad(3)),
-                inject(ByteCode.BIPush(8)),
-                inject(ByteCode.ILoad(5)),
-                inject(ByteCode.IMul()),
-                inject(ByteCode.ILoad(4)),
-                inject(ByteCode.IAdd()),
-                inject(ByteCode.ILoad(1)),
-                inject(ByteCode.ILoad(2)),
-                inject(ByteCode.InvokeSpecial("net/optifine/shaders/gui/GuiButtonEnumShaderOption", "<init>", "(Lnet/optifine/shaders/config/EnumShaderOption;IIII)V")),
-                inject(ByteCode.InvokeInterface("java/util/List", "add", "(Ljava/lang/Object;)Z")),
-                inject(ByteCode.Pop()),
-                inject(ByteCode.ALoad(0)),
-                inject(ByteCode.GetField("net/optifine/shaders/gui/GuiShaders", "n", "Ljava/util/List;")),
-                inject(ByteCode.New("net/optifine/shaders/gui/GuiButtonEnumShaderOption")),
-                inject(ByteCode.Dup()),
-                inject(ByteCode.Ldc("BLOCK_ID")),
-                inject(ByteCode.InvokeStatic("net/optifine/shaders/config/EnumShaderOption", "valueOf", "(Ljava/lang/String;)Lnet/optifine/shaders/config/EnumShaderOption;")),
-                inject(ByteCode.ILoad(3)),
-                inject(ByteCode.BIPush(9)),
-                inject(ByteCode.ILoad(5)),
-                inject(ByteCode.IMul()),
-                inject(ByteCode.ILoad(4)),
-                inject(ByteCode.IAdd()),
-                inject(ByteCode.ILoad(1)),
-                inject(ByteCode.ILoad(2)),
-                inject(ByteCode.InvokeSpecial("net/optifine/shaders/gui/GuiButtonEnumShaderOption", "<init>", "(Lnet/optifine/shaders/config/EnumShaderOption;IIII)V")),
-                inject(ByteCode.InvokeInterface("java/util/List", "add", "(Ljava/lang/Object;)Z")),
-                inject(ByteCode.Pop()),
-                inject(ByteCode.ALoad(0)),
-                inject(ByteCode.GetField("net/optifine/shaders/gui/GuiShaders", "n", "Ljava/util/List;")),
-                inject(ByteCode.New("net/optifine/shaders/gui/GuiButtonEnumShaderOption")),
-                inject(ByteCode.Dup()),
-                inject(ByteCode.Ldc("PLAYERMOOD")),
-                inject(ByteCode.InvokeStatic("net/optifine/shaders/config/EnumShaderOption", "valueOf", "(Ljava/lang/String;)Lnet/optifine/shaders/config/EnumShaderOption;")),
-                inject(ByteCode.ILoad(3)),
-                inject(ByteCode.BIPush(10)),
-                inject(ByteCode.ILoad(5)),
-                inject(ByteCode.IMul()),
-                inject(ByteCode.ILoad(4)),
-                inject(ByteCode.IAdd()),
-                inject(ByteCode.ILoad(1)),
-                inject(ByteCode.ILoad(2)),
-                inject(ByteCode.InvokeSpecial("net/optifine/shaders/gui/GuiButtonEnumShaderOption", "<init>", "(Lnet/optifine/shaders/config/EnumShaderOption;IIII)V")),
-                inject(ByteCode.InvokeInterface("java/util/List", "add", "(Ljava/lang/Object;)Z")),
-                inject(ByteCode.Pop()));
-
-        patch("调整侧边位置", method,
-                ByteCode.ALoad(0),
-                ByteCode.GetField("net/optifine/shaders/gui/GuiShaders", "shaderList", "Lnet/optifine/shaders/gui/GuiSlotShaders;"),
-                ByteCode.BIPush(7),
-                ByteCode.BIPush(8),
-                ByteCode.InvokeVirtual("net/optifine/shaders/gui/GuiSlotShaders", "d", "(II)V"),
-                inject(ByteCode.BIPush(10)),
-                inject(ByteCode.IStore(4)));
-    }
-
-    @MethodPatch("actionPerformed(Lbja;Z)V")
-    public void actionPerformed(MethodNode method) {
-        LabelNode label = ByteCode.Label();
-
-        patch("增加高版本特性按钮点击事件", method,
-                inject(ByteCode.ALoad(1)),
-                inject(ByteCode.ILoad(2)),
-                inject(ByteCode.InvokeStatic(FORWARDFEATURES, "actionPerformed", "(Lbja;Z)Z")),
-                inject(ByteCode.IfZero(label)),
-                inject(ByteCode.Return()),
-                inject(label),
-                method.instructions.getFirst());
-
-        patch("修复打开光影文件夹报错", method,
-                remove(ByteCode.Ldc("cmd.exe /C start \"Open file\" \"%s\"")),
-                remove(ByteCode.IConst(1)),
-                remove(ByteCode.NewArray("java/lang/Object")),
-                inject(ByteCode.IConst(5)),
-                inject(ByteCode.NewArray("java/lang/String")),
-                ByteCode.Dup(),
-                ByteCode.IConst(0),
-                inject(ByteCode.Ldc("cmd.exe")),
-                inject(ByteCode.AAStore()),
-                inject(ByteCode.Dup()),
-                inject(ByteCode.IConst(1)),
-                inject(ByteCode.Ldc("/C")),
-                inject(ByteCode.AAStore()),
-                inject(ByteCode.Dup()),
-                inject(ByteCode.IConst(2)),
-                inject(ByteCode.Ldc("start")),
-                inject(ByteCode.AAStore()),
-                inject(ByteCode.Dup()),
-                inject(ByteCode.IConst(3)),
-                inject(ByteCode.Ldc("Open file")),
-                inject(ByteCode.AAStore()),
-                inject(ByteCode.Dup()),
-                inject(ByteCode.IConst(4)),
-                ByteCode.GetStatic("net/optifine/shaders/Shaders", "shaderPacksDir", "Ljava/io/File;"),
-                ByteCode.InvokeVirtual("java/io/File", "getAbsolutePath", "()Ljava/lang/String;"),
-                ByteCode.AAStore(),
-                remove(ByteCode.InvokeStatic("java/lang/String", "format", "(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;")),
-                ByteCode.AStore(3),
-                ByteCode.Label(),
-                ByteCode.LineNumber(),
-                ByteCode.InvokeStatic("java/lang/Runtime", "getRuntime", "()Ljava/lang/Runtime;"),
-                ByteCode.ALoad(3),
-                remove(ByteCode.InvokeVirtual("java/lang/Runtime", "exec", "(Ljava/lang/String;)Ljava/lang/Process;")),
-                inject(ByteCode.InvokeVirtual("java/lang/Runtime", "exec", "([Ljava/lang/String;)Ljava/lang/Process;")));
+    // No method patches on purpose; see the class comment.
+    @SuppressWarnings("unused")
+    private static void unusedMarker() {
     }
 }

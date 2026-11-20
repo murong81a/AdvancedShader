@@ -21,7 +21,7 @@ public class ConnectedParserPatcher extends Patcher {
                 inject(ByteCode.InvokeSpecial(MATCHBLOCKSTATE, "<init>", "(I[I[Ljava/lang/String;)V")));
     }
 
-    @MethodPatch("parseBlockMetadatas(Laow;[Ljava/lang/String;)[I")
+    @MethodPatch("parseBlockMetadatas(Lakf;[Ljava/lang/String;)[I")
     public void parseBlockMetadatas(MethodNode method) {
         patch("修复block.properties无法正确匹配方块问题", method,
                 ByteCode.ALoad(7),

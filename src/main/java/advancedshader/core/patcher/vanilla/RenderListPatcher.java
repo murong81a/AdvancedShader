@@ -6,7 +6,7 @@ import org.objectweb.asm.tree.MethodNode;
 import advancedshader.core.patcher.Patcher;
 import advancedshader.core.patcher.Patcher.Patch;
 
-@Patch("bva")
+@Patch("boj")
 public class RenderListPatcher extends Patcher {
 
     @MethodPatch("preRenderRegion(III)V")
@@ -18,19 +18,19 @@ public class RenderListPatcher extends Patcher {
                 inject(ByteCode.ILoad(1)),
                 inject(ByteCode.I2D()),
                 inject(ByteCode.ALoad(0)),
-                inject(ByteCode.GetField("bva", "viewEntityX", "D")),
+                inject(ByteCode.GetField("boj", "viewEntityX", "D")),
                 inject(ByteCode.DSub()),
                 inject(ByteCode.D2F()),
                 inject(ByteCode.ILoad(2)),
                 inject(ByteCode.I2D()),
                 inject(ByteCode.ALoad(0)),
-                inject(ByteCode.GetField("bva", "viewEntityY", "D")),
+                inject(ByteCode.GetField("boj", "viewEntityY", "D")),
                 inject(ByteCode.DSub()),
                 inject(ByteCode.D2F()),
                 inject(ByteCode.ILoad(3)),
                 inject(ByteCode.I2D()),
                 inject(ByteCode.ALoad(0)),
-                inject(ByteCode.GetField("bva", "viewEntityZ", "D")),
+                inject(ByteCode.GetField("boj", "viewEntityZ", "D")),
                 inject(ByteCode.DSub()),
                 inject(ByteCode.D2F()),
                 inject(ByteCode.InvokeStatic(CHUNKOFFSET, "setChunkOffset", "(FFF)Z")),

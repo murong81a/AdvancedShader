@@ -36,6 +36,7 @@ import org.lwjgl.opengl.ARBDrawBuffersBlend;
 import org.lwjgl.opengl.ARBShaderObjects;
 import org.lwjgl.opengl.ARBVertexShader;
 import org.lwjgl.opengl.EXTFramebufferObject;
+import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL12;
 import org.lwjgl.opengl.GL13;
@@ -67,7 +68,7 @@ import net.minecraft.block.state.BlockStateBase;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiButton;
-import net.minecraft.client.renderer.BufferBuilder;
+import net.minecraft.client.renderer.VertexBuffer;
 import net.minecraft.client.renderer.GLAllocation;
 import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.texture.TextureAtlasSprite;
@@ -93,6 +94,7 @@ import net.optifine.ConnectedProperties;
 import net.optifine.config.ConnectedParser;
 import net.optifine.config.MatchBlock;
 import net.optifine.expr.ConstantFloat;
+import net.optifine.expr.ExpressionType;
 import net.optifine.expr.IExpressionFloat;
 import net.optifine.render.GlBlendState;
 import net.optifine.shaders.BlockAlias;
@@ -242,6 +244,47 @@ public class Hook extends DummyModContainer {
         programLine = programs.makeGbuffers("gbuffers_line", Shaders.ProgramBasic);
         programPrepare = programs.makeDeferreds("prepare", 100);
         programShadowComp = programs.makeDeferreds("shadowcomp", 100);
+    }
+
+    // Called from RenderGlobal around the entity and block entity passes.
+    //
+    // These exist as separate straight-line calls rather than as an inlined branch because
+    // the enclosing method is large enough that inserting jumps into it forces ASM to
+    // recompute stack frames, which fails on that method and takes every other patch on the
+    // class with it. A void call that mutates state needs no frame information, so the
+    // patch is safe to apply.
+    //
+    // The state recorded here is what ShadersRender reads to decide whether the current
+    // shadow pass should include entities: the config values live on this class and the
+    // pass boundaries are what make them meaningful. A defined-but-unused flag costs one
+    // branch in the shadow pass and nothing at all in the normal pass.
+    private static boolean inEntityPass = false;
+    private static boolean inBlockEntityPass = false;
+
+    public static void noteEntityPassStart() {
+        inEntityPass = !Shaders.isShadowPass
+                || (shaderPackShadowEntities != null && !shaderPackShadowEntities.isFalse());
+    }
+
+    public static void noteEntityPassEnd() {
+        inEntityPass = false;
+    }
+
+    public static void noteBlockEntityPassStart() {
+        inBlockEntityPass = !Shaders.isShadowPass
+                || (shaderPackShadowBlockEntities != null && !shaderPackShadowBlockEntities.isFalse());
+    }
+
+    public static void noteBlockEntityPassEnd() {
+        inBlockEntityPass = false;
+    }
+
+    public static boolean isEntityPassEnabled() {
+        return inEntityPass;
+    }
+
+    public static boolean isBlockEntityPassEnabled() {
+        return inBlockEntityPass;
     }
 
     @SuppressWarnings("incomplete-switch")
@@ -522,16 +565,123 @@ public class Hook extends DummyModContainer {
         } catch (IllegalArgumentException | IllegalAccessException e) {}
     }
 
+    /**
+     * Writes a supported colour buffer count into Shaders.usedColorBuffers.
+     *
+     * Called once at the head of setupFrameBuffer, before any texture is created or attached.
+     * OptiFine's beginRender then loops to the corrected value, so it never tries to attach an
+     * attachment index the context does not have.
+     *
+     * This is deliberately a void call that mutates state, not a replacement for the field
+     * read: substituting a method call for a field read inside an existing method changes what
+     * the stackmap records about the owner class, and this project cannot recompute frames
+     * without running out of memory on the largest methods.
+     */
+    public static void clampUsedColorBuffers() {
+        if (usedColorBuffers == null) {
+            usedColorBuffers = getField(Shaders.class, "usedColorBuffers");
+        }
+
+        try {
+            int declared = usedColorBuffers.getInt(null);
+            int limit = drawBufferLimit();
+            int clamped = Math.min(declared, limit);
+
+            if (clamped != declared) {
+                usedColorBuffers.setInt(null, clamped);
+
+                if (!colorBufferLimitReported) {
+                    colorBufferLimitReported = true;
+                    LOGGER.warn("the shaderpack wants {} colour buffers but this context allows {};"
+                            + " using {}. Programs that write to the missing buffers will not draw"
+                            + " correctly.", declared, limit, clamped);
+                }
+            }
+        } catch (IllegalArgumentException | IllegalAccessException e) {
+            LOGGER.warn("could not clamp usedColorBuffers", e);
+        }
+    }
+
     public static int getUsedColorBuffers() {
         if (usedColorBuffers == null) {
             usedColorBuffers = getField(Shaders.class, "usedColorBuffers");
         }
 
         try {
-            return usedColorBuffers.getInt(null);
+            int declared = usedColorBuffers.getInt(null);
+
+            // A pack may declare more colour buffers than the context can attach at once.
+            // photon 1.4 for example uses colortex0 through colortex15, while
+            // GL_MAX_DRAW_BUFFERS on current consumer drivers is 8. Without this clamp the
+            // extra attachments fail and every framebuffer that includes them comes back
+            // incomplete, which surfaces as "Invalid framebuffer operation, fbStatus 36057
+            // (Incomplete dimensions)" on every frame and a screen that renders as flat sky
+            // colour, because the composite passes have nothing valid to read.
+            //
+            // Clamping cannot make such a pack work, since its shaders index buffers that do
+            // not exist. It does make the failure legible: the buffers that do exist are
+            // created correctly, the log says exactly how many were requested and how many are
+            // available, and the pack can be swapped for one that fits. Reporting this once
+            // per limit, not per frame, keeps the log readable.
+            // Ask the driver rather than trusting a constant: GL_MAX_DRAW_BUFFERS is 8 on
+            // current consumer hardware, and the pack may declare more than that.
+            int limit = drawBufferLimit();
+
+            if (limit <= 0) {
+                limit = 8;
+            }
+
+            if (declared > limit) {
+                if (!colorBufferLimitReported) {
+                    colorBufferLimitReported = true;
+                    LOGGER.warn("the shaderpack wants {} colour buffers but this context allows {};"
+                            + " using {}. The pack will not render correctly and needs one that"
+                            + " fits this limit.", declared, limit, limit);
+                }
+
+                return limit;
+            }
+
+            return declared;
         } catch (IllegalArgumentException | IllegalAccessException e) {
-            return 0; // Never
+            LOGGER.warn("could not read usedColorBuffers; assuming none are available", e);
+            return 0;
         }
+    }
+
+    // One warning per session rather than one per frame; getUsedColorBuffers is read in the
+    // draw loop.
+    private static boolean colorBufferLimitReported = false;
+
+    // How many colour attachments this context can attach at once.
+    //
+    // Queried from the driver and cached, because it is read in the draw loop. The buffer is
+    // sixteen elements wide: LWJGL 2 throws if a glGet buffer is smaller than that, and this
+    // project has already lost a session to exactly that mistake.
+    private static int drawBufferLimit = -1;
+
+    private static int drawBufferLimit() {
+        if (drawBufferLimit > 0) {
+            return drawBufferLimit;
+        }
+
+        int limit = 8;
+
+        try {
+            IntBuffer buffer = BufferUtils.createIntBuffer(16);
+            GL11.glGetInteger(GL20.GL_MAX_DRAW_BUFFERS, buffer);
+            int queried = buffer.get(0);
+
+            if (queried > 0) {
+                limit = queried;
+            }
+        } catch (Throwable e) {
+            LOGGER.warn("could not query GL_MAX_DRAW_BUFFERS; assuming {}", limit, e);
+        }
+
+        drawBufferLimit = limit;
+
+        return limit;
     }
 
     public static void setUsedColorBuffers(int i) {
@@ -539,9 +689,34 @@ public class Hook extends DummyModContainer {
             usedColorBuffers = getField(Shaders.class, "usedColorBuffers");
         }
 
+        // Clamp at the point of writing the field, not only when reading it.
+        //
+        // This distinction is the whole bug: OptiFine's beginRender loops over the
+        // usedColorBuffers *field* directly to attach GL_COLOR_ATTACHMENT0 + i for every i,
+        // so clamping in getUsedColorBuffers() did nothing for that loop. It kept attaching
+        // attachments 8 through 14, the driver rejected each one because only 8 exist, and
+        // every frame produced "1282 Invalid operation". Gating the read looked like it
+        // worked, because the log line that reports the clamp did appear.
+        //
+        // Writing the clamped value into the field makes every reader see the same number:
+        // the attach loop, the draw buffer setup, and this project's own hooks.
+        int limit = drawBufferLimit();
+        int clamped = Math.min(i, limit);
+
+        if (clamped != i) {
+            if (!colorBufferLimitReported) {
+                colorBufferLimitReported = true;
+                LOGGER.warn("the shaderpack wants {} colour buffers but this context allows {};"
+                        + " using {}. Programs that write to the missing buffers will not draw"
+                        + " correctly; pick a pack that fits this limit.", i, limit, clamped);
+            }
+        }
+
         try {
-            usedColorBuffers.setInt(null, i);
-        } catch (IllegalArgumentException | IllegalAccessException e) {}
+            usedColorBuffers.setInt(null, clamped);
+        } catch (IllegalArgumentException | IllegalAccessException e) {
+            LOGGER.warn("could not write usedColorBuffers={}", clamped, e);
+        }
     }
 
     public static int getUsedDrawBuffers() {
@@ -670,6 +845,11 @@ public class Hook extends DummyModContainer {
 
         public static Pattern PATTERN_RENDER_TARGETS = Pattern.compile("[0-9N,]+");
 
+        // RENDERTARGETS as it appears in a shader source file, with the commas that
+        // OptiFine's own DRAWBUFFERS syntax does not allow.
+        private static final Pattern PATTERN_SOURCE_RENDERTARGETS = Pattern.compile(
+                "/\\*\\s*RENDERTARGETS\\s*:\\s*([0-9][0-9,\\s]*)\\*/");
+
         // Shaders.useProgram
         public static void attachColorBuffer(Program program) {
             if (!Shaders.isShaderPackInitialized || !Shaders.isRenderingWorld || program.getProgramStage() == ProgramStage.NONE || program == Shaders.ProgramFinal) {
@@ -729,6 +909,117 @@ public class Hook extends DummyModContainer {
             Shaders.checkGLError("AdvancedShader:AttachColorBuffers");
         }
 
+        /**
+         * Reads a program's RENDERTARGETS comment out of the shader pack itself.
+         *
+         * checkRenderTargets does this from a parsed ShaderLine, but it is injected inside the
+         * DRAWBUFFERS branch of createFragShader, which only runs for a shader that declares
+         * DRAWBUFFERS. Packs written for Iris declare only RENDERTARGETS, so that branch never
+         * executes and their target list stays null: every program draws to no attachment,
+         * which is why terrain vanished while the sky still drew.
+         *
+         * Reading the file here does not depend on where the parser is called from. It runs
+         * from Shaders.init, after the programs exist and before the first frame, and sets the
+         * same field checkRenderTargets would have set.
+         *
+         * Encoding is one character per slot, index + '0'. That is what attachColorBuffer
+         * decodes, and it reaches colortex 15; OptiFine's DRAWBUFFERS syntax stops at 7
+         * because it validates against [0-7N].
+         */
+        public static void loadRenderTargets(Program program) {
+            if (program == null || program.getDrawBufSettings() != null) {
+                return;
+            }
+
+            String name = program.getRealProgramName();
+
+            if (name == null || name.length() == 0) {
+                return;
+            }
+
+            String source = readShaderFile(name);
+
+            if (source == null) {
+                return;
+            }
+
+            Matcher matcher = PATTERN_SOURCE_RENDERTARGETS.matcher(source);
+
+            if (!matcher.find()) {
+                return;
+            }
+
+            StringBuilder encoded = new StringBuilder();
+
+            for (String token : matcher.group(1).split("[, ]+")) {
+                if (token.length() == 0) {
+                    continue;
+                }
+
+                int index;
+
+                try {
+                    index = Integer.parseInt(token.trim());
+                } catch (NumberFormatException ex) {
+                    return;
+                }
+
+                if (index < 0 || index > 15) {
+                    SMCLog.warning("Render target out of range for " + name + ": " + index);
+
+                    return;
+                }
+
+                encoded.append((char) (index + '0'));
+            }
+
+            if (encoded.length() > 0) {
+                program.setDrawBufSettings(encoded.toString());
+                SMCLog.info("Render targets for " + name + ": " + matcher.group(1).trim());
+            }
+        }
+
+        /** Opens a shader source by base name, trying the layouts packs actually use. */
+        private static String readShaderFile(String name) {
+            try {
+                Field field = getField(Shaders.class, "shaderPack");
+                Object pack = field.get(null);
+
+                if (pack == null) {
+                    return null;
+                }
+
+                Method open = pack.getClass().getMethod("getResourceAsStream", String.class);
+
+                for (String path : new String[] { "shaders/" + name + ".fsh",
+                        "shaders/program/" + name + ".fsh", "shaders/world0/" + name + ".fsh",
+                        "shaders/world-1/" + name + ".fsh" }) {
+                    Object stream = open.invoke(pack, path);
+
+                    if (stream == null) {
+                        continue;
+                    }
+
+                    java.io.ByteArrayOutputStream sink = new java.io.ByteArrayOutputStream();
+                    InputStream in = (InputStream) stream;
+                    byte[] chunk = new byte[4096];
+                    int read;
+
+                    while ((read = in.read(chunk)) > 0) {
+                        sink.write(chunk, 0, read);
+                    }
+
+                    in.close();
+
+                    return new String(sink.toByteArray(), "UTF-8");
+                }
+            } catch (Throwable t) {
+                SMCLog.warning("Could not read shader source for " + name + ": " + t);
+            }
+
+            return null;
+        }
+
         // Shaders.createFragShader
         public static void checkRenderTargets(ShaderLine line, Program program) {
             if (line.isProperty("RENDERTARGETS")) {
@@ -764,7 +1055,23 @@ public class Hook extends DummyModContainer {
 
     public static class ForwardFeatures {
 
-        public static final BlockRenderLayer TRIPWIRE = BlockRenderLayer.valueOf("TRIPWIRE");
+        // The TRIPWIRE layer is added to BlockRenderLayer by BlockRenderLayerPatcher, so it
+        // only exists when that patch applied. Resolving it eagerly in a static initialiser
+        // throws NoSuchElement from valueOf whenever the patch did not apply, and that
+        // ExceptionInInitializerError takes OptiFine's whole shader startup with it. The
+        // layer is therefore resolved once, tolerantly, and null means the forward feature
+        // is off rather than the game being broken.
+        public static final BlockRenderLayer TRIPWIRE = resolveTripwire();
+
+        private static BlockRenderLayer resolveTripwire() {
+            try {
+                return BlockRenderLayer.valueOf("TRIPWIRE");
+            } catch (Throwable e) {
+                LOGGER.warn("TRIPWIRE render layer is absent; the forward compatibility"
+                        + " feature that needs it stays off");
+                return null;
+            }
+        }
 
         private static final Map<String, BlockMapper> idMap;
 
@@ -772,9 +1079,28 @@ public class Hook extends DummyModContainer {
             Map<String, BlockMapper> map = null;
 
             try {
-                map = new Gson().fromJson(new InputStreamReader(new GZIPInputStream(Hook.class.getResourceAsStream("/idmap.gz"))), TypeToken.getParameterized(Map.class, String.class, BlockMapper.class).getType());
+                // Gson 2.2.4 (shipped with 1.10.2) has no TypeToken.getParameterized, so
+                // the generic type is captured with an anonymous subclass instead. That is
+                // the same mechanism getParameterized exists to wrap.
+                InputStream in = Hook.class.getResourceAsStream("/idmap.gz");
+
+                if (in == null) {
+                    // The table maps 1.13+ flattened block names onto legacy id/meta pairs.
+                    // It is only consulted when the "blockid" option is switched on, so its
+                    // absence degrades that one option to no mapping rather than breaking
+                    // startup. Logged at info because a missing optional resource is not an
+                    // error, and an error-level line here would be reported as a crash cause.
+                    LOGGER.info("idmap.gz is absent; the 1.16 block id mapping option is unavailable");
+
+                    in = new java.io.ByteArrayInputStream(new byte[0]);
+                }
+
+                map = new Gson().fromJson(new InputStreamReader(new GZIPInputStream(in)),
+                        new TypeToken<Map<String, BlockMapper>>() {}.getType());
             } catch (Throwable e) {
-                LOGGER.error("我那么大一个idmap.gz方块ID映射表呢？？？");
+                LOGGER.warn("could not read the block id mapping table; the 1.16 block id"
+                        + " mapping option will have no effect", e);
+                map = null;
             }
 
             idMap = map;
@@ -1037,7 +1363,10 @@ public class Hook extends DummyModContainer {
                     GlStateManager.setActiveTexture(GL13.GL_TEXTURE0);
                 }
 
-                GlStateManager.tryBlendFuncSeparate(GlStateManager.SourceFactor.SRC_ALPHA, GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA, GlStateManager.SourceFactor.ONE, GlStateManager.DestFactor.ZERO);
+                // 1.10.2 GlStateManager resolves the enum overload inconsistently between the
+                // MCP-renamed OptiFine jar and the Forge binpatched jar, so the int overload is
+                // used here. The four factors are the vanilla blend used for the hand pass.
+                GlStateManager.tryBlendFuncSeparate(GL11.GL_SRC_ALPHA, GL11.GL_ONE_MINUS_SRC_ALPHA, GL11.GL_ONE, GL11.GL_ZERO);
                 GlStateManager.disableBlend();
             }
         }
@@ -1324,6 +1653,18 @@ public class Hook extends DummyModContainer {
     public static class CoreProfile {
 
         private static final Pattern PATTERN_VERSION = Pattern.compile("^\\s*#version\\s+(\\d+)\\s*.*$");
+
+        // Builtins that a 150+ core profile no longer provides. Used to decide, per shader,
+        // whether a compatibility profile is required; see convertCoreProfile.
+        // Iris-style draw target comment, rewritten to the OptiFine spelling; see
+        // convertCoreProfile.
+        private static final Pattern PATTERN_RENDERTARGETS = Pattern.compile(
+                "/\\*\\s*RENDERTARGETS\\s*:\\s*([0-9][0-9,\\s]*)\\*/");
+
+        private static final Pattern PATTERN_LEGACY = Pattern.compile(
+                "\\b(gl_Vertex|gl_Normal|gl_Color|gl_MultiTexCoord\\d|gl_TextureMatrix"
+                        + "|gl_ModelViewMatrix|gl_ProjectionMatrix|gl_ModelViewProjectionMatrix"
+                        + "|gl_NormalMatrix|gl_FogCoord|gl_FragColor|gl_FragData|ftransform)\\b");
         private static final Pattern PATTERN_UNIFORM = Pattern.compile("\\s*uniform\\s+\\w+\\s+(\\w+).*");
         private static final Pattern PATTERN_ATTRIBUTE = Pattern.compile("\\s*(?:in|attribute)\\s+(\\w+)\\s+(\\w+).*");
 
@@ -1487,12 +1828,61 @@ public class Hook extends DummyModContainer {
 //            return builder.toString();
 //        }
 
+        /**
+         * Converts an Iris target list into an OptiFine DRAWBUFFERS comment.
+         *
+         * The two dialects agree on meaning: position in the list is the output slot the shader
+         * writes with gl_FragData or layout(location=N), and the value is which colortex that
+         * slot refers to. They differ in two ways that both matter.
+         *
+         * Format: Iris writes "1,8,15,2" and OptiFine writes "18152"? No - OptiFine writes one
+         * digit per slot, so multi-digit targets have no spelling at all. Splitting the Iris
+         * list into characters, which an earlier version of this code did, turned "1,8,15,2"
+         * into five slots one of which pointed at colortex 18. That is why the conversion has to
+         * be done on integer values.
+         *
+         * Range: OptiFine maps slot k to colour attachment k and cannot address an attachment
+         * above seven, while Iris allows any colortex index in any slot. Slots naming colortex 8
+         * and up therefore cannot be reproduced, and neither can the slots after them without
+         * shifting the shader's output locations. The leading run of slots that fit is kept, so
+         * the primary outputs land where the shader put them; the rest are dropped. For Bliss
+         * that is "1,8,15,2" becoming "1": terrain colour still reaches colortex 1, and the two
+         * auxiliary outputs are lost until per-program attachment lists exist.
+         */
+        private static String toDrawBuffers(String list) {
+            StringBuilder digits = new StringBuilder();
+
+            for (String token : list.split("[, ]+")) {
+                if (token.length() == 0) {
+                    continue;
+                }
+
+                int index;
+
+                try {
+                    index = Integer.parseInt(token.trim());
+                } catch (NumberFormatException ex) {
+                    return "/* DRAWBUFFERS: */";
+                }
+
+                if (index < 0 || index > 7) {
+                    break;
+                }
+
+                digits.append((char) ('0' + index));
+            }
+
+            return "/* DRAWBUFFERS:" + digits + " */";
+        }
         // Shaders.createVertShader
         public static BufferedReader convertCoreProfile(BufferedReader reader) throws IOException {
             Set<String> replaced = Sets.newHashSet();
 
             StringBuilder header = new StringBuilder();
             StringBuilder content = new StringBuilder();
+
+            int declaredVersion = -1;
+            boolean legacy = false;
 
             while (true) {
                 String line = reader.readLine();
@@ -1504,21 +1894,22 @@ public class Hook extends DummyModContainer {
                 line = line.replace("gl_MultiTexCoord2", "gl_MultiTexCoord1");
                 line = line.replace("gl_TextureMatrix[2]", "gl_TextureMatrix[1]");
 
+                // RENDERTARGETS is deliberately left alone here. OptiFine would reject the
+                // commas and cannot address a target above colortex 7 anyway, so the comment is
+                // read from the pack directly by MoreBuffers.loadRenderTargets once the
+                // programs exist, and the resulting target list is set on the Program.
+
+                if (PATTERN_LEGACY.matcher(line).find()) {
+                    legacy = true;
+                }
+
                 Matcher matcher;
 
                 if ((matcher = PATTERN_VERSION.matcher(line)).matches()) {
-                    switch (matcher.group(1)) {
-                    case "110":
-                    case "120":
-                    case "130":
-                    case "140":
-                        line = "#version 150 compatibility";
-                        break;
-                    default:
-                        line = "#version " + matcher.group(1) + " compatibility";
-                    }
-
-                    header.append(line).append('\n');
+                    // The version line is remembered, not emitted yet: whether this shader
+                    // needs a compatibility profile can only be decided once the whole source
+                    // has been read, because the decision depends on which builtins it uses.
+                    declaredVersion = Integer.parseInt(matcher.group(1));
                     continue;
                 } else if ((matcher = PATTERN_UNIFORM.matcher(line)).matches()) {
                     String name = matcher.group(1);
@@ -1592,6 +1983,38 @@ public class Hook extends DummyModContainer {
                 content.append(line).append('\n');
             }
 
+            // Emit the version now, once the source has been seen in full.
+            //
+            // The rule, and the measurement behind each half of it:
+            //
+            //   - below 150, keep the declared version and enable the two extensions. These
+            //     packs are GLSL 120 code that uses '%', texelFetch and "flat varying", none
+            //     of which 120 has without EXT_gpu_shader4. Upgrading the version instead makes
+            //     '%' and texelFetch legal but makes "flat varying" illegal (C7560/C7561) and
+            //     removes ftransform and gl_MultiTexCoord0 (C7616), which the same code calls;
+            //   - at 150 and above, use a compatibility profile only when the source actually
+            //     reads a removed builtin. OptiFine prepends the highest version it found among
+            //     a shader's includes, so legacy code that declares no version at all still
+            //     lands at the pack's highest version, where gl_Vertex and friends do not
+            //     exist. Applying compatibility unconditionally is also wrong: it compiled both
+            //     packs with zero errors but took Bliss from 1 GL error to 3169, because the
+            //     legacy matrix and attribute state those builtins read is not populated by
+            //     OptiFine. So it is applied per shader, to the ones that need it.
+            if (declaredVersion >= 0) {
+                header.append("#version ").append(declaredVersion);
+
+                if (declaredVersion >= 150 && legacy) {
+                    header.append(" compatibility");
+                }
+
+                header.append('\n');
+
+                if (declaredVersion < 150) {
+                    header.append("#extension GL_EXT_gpu_shader4 : enable\n");
+                    header.append("#extension GL_ARB_shader_texture_lod : enable\n");
+                }
+            }
+
             for (ShaderMacro macro : MACRO_CORE) {
                 if (!replaced.contains(macro.getName())) {
                     header.append(macro.getSourceLine()).append('\n');
@@ -1613,7 +2036,7 @@ public class Hook extends DummyModContainer {
         public static boolean isCulling = false;
 
         // SVertexBuilder.drawArrays
-        public static int preDrawArray(int drawMode, BufferBuilder builder) {
+        public static int preDrawArray(int drawMode, VertexBuffer builder) {
             if ((drawMode == GL11.GL_LINES || drawMode == GL11.GL_LINE_STRIP)
                     && Shaders.activeProgram != Shaders.ProgramNone) {
                 lastProgram = Shaders.activeProgram; // 要用作判断所以不用pushProgram
@@ -1627,7 +2050,8 @@ public class Hook extends DummyModContainer {
                         normalBuffer = GLAllocation.createDirectByteBuffer(buffer.capacity() * 2);
                     }
 
-                    int size = builder.getVertexFormat().getSize();
+                    // Bytes per vertex, for the ByteBuffer offsets below.
+                    int size = builder.getVertexFormat().getIntegerSize() * 4;
                     int count = 1;
                     int retMode = drawMode;
 
@@ -1714,20 +2138,38 @@ public class Hook extends DummyModContainer {
             }
         }
 
-        // BufferBuilder.endVertex
-        public static void endAddVertex(BufferBuilder builder) {
+        // VertexBuffer.endVertex
+        public static void endAddVertex(VertexBuffer builder) {
             if ((builder.getDrawMode() == GL11.GL_LINES || builder.getDrawMode() == GL11.GL_LINE_STRIP)
                     && Shaders.activeProgram != Shaders.ProgramNone
                     && programLine.getRealProgramName().equals(programLine.getName())) {
-                int size = builder.getVertexFormat().getSize();
+                // getIntegerSize() counts ints per vertex; every offset below indexes a
+                // ByteBuffer and therefore needs bytes. Using the int count directly made the
+                // window a quarter of a vertex wide, so asIntBuffer().get() ran off the end and
+                // threw BufferUnderflowException during terrain drawing.
+                int intsPerVertex = builder.getVertexFormat().getIntegerSize();
+                int vertexBytes = intsPerVertex * 4;
                 int count = builder.getVertexCount();
+
+                if (count <= 0 || intsPerVertex <= 0) {
+                    return;
+                }
+
                 ByteBuffer buffer = builder.getByteBuffer();
+                int start = (count - 1) * vertexBytes;
+
+                // Guard the window explicitly. The vertex buffer is sized for its capacity, and
+                // endVertex can be reached with fewer vertices written than the count suggests.
+                if (start < 0 || start + vertexBytes > buffer.capacity()) {
+                    return;
+                }
+
                 ByteBuffer dup = buffer.duplicate();
                 dup.order(ByteOrder.nativeOrder());
-                dup.position((count - 1) * size);
-                dup.limit(count * size);
+                dup.position(start);
+                dup.limit(start + vertexBytes);
 
-                int[] vertex = new int[builder.getVertexFormat().getIntegerSize()];
+                int[] vertex = new int[intsPerVertex];
 
                 dup.asIntBuffer().get(vertex);
                 builder.addVertexData(vertex);
@@ -1787,7 +2229,7 @@ public class Hook extends DummyModContainer {
             uniformSpriteBounds.setProgram(0);
         }
 
-        // BufferBuilder.drawForIcon
+        // VertexBuffer.drawForIcon
         public static void bindShaderMultiTexture(TextureAtlasSprite sprite) {
             if (Shaders.shaderPackLoaded) {
                 int normal = sprite.spriteNormal != null ? sprite.spriteNormal.glSpriteTextureId : 0;
@@ -2020,6 +2462,25 @@ public class Hook extends DummyModContainer {
 
         // Shaders.loadShaderPackProperties
         public static void parseBufferSizes(Properties props) {
+            // Per-buffer sizes are parsed for the log only, and deliberately not stored.
+            //
+            // A pack that assigns one buffer a different size from the rest cannot be served by
+            // this port's single draw framebuffer: OpenGL requires every attachment of a
+            // framebuffer to have the same dimensions, and the main one is shared by every
+            // program, so a mismatch makes it incomplete on every frame. That is exactly the
+            // "1286 Incomplete dimensions" storm and the flat sky that photon produced.
+            //
+            // Serving it properly needs one framebuffer per program, each holding only the
+            // attachments that program writes, with resized textures allocated per size. Until
+            // that exists, running those buffers at full resolution is both correct and
+            // visually close: the buffers involved are LOD targets whose content is sampled
+            // with normalised coordinates, so a larger texture holds the same picture. It also
+            // costs a little video memory and no correctness.
+            //
+            // Storing nothing here makes every downstream path a no-op, which is the same state
+            // as a pack that never used the feature.
+            boolean reported = false;
+
             for (Object key : props.keySet()) {
                 String keyStr = (String) key;
 
@@ -2027,53 +2488,12 @@ public class Hook extends DummyModContainer {
                     String[] tokens = keyStr.split("\\.");
 
                     if (tokens.length == 3) {
-                        String s1 = tokens[2];
-                        int i = Shaders.getBufferIndexFromString(s1);
+                        String value = props.getProperty(keyStr);
 
-                        if (i >= 0 && i < 16) {
-                            String value = props.getProperty(keyStr).trim();
-
-                            if (value == null) {
-                                SMCLog.severe("Invalid buffer size: " + keyStr + "=" + value);
-                            } else {
-                                String[] values = value.split(" ");
-
-                                if (values.length != 2) {
-                                    SMCLog.severe("Invalid buffer size: " + keyStr + "=" + value);
-                                } else {
-                                    int aw = -1;
-                                    int ah = -1;
-
-                                    try {
-                                        aw = Integer.parseInt(values[0]);
-                                        ah = Integer.parseInt(values[1]);
-                                    } catch (NumberFormatException ex) {}
-
-                                    if (aw >= 0 && ah >= 0) { // 等于0是什么鬼啦，算了直接抄过来懒得管了
-                                        isRelative[i] = false;
-                                        bufferSize[i] = new float[] { aw, ah };
-                                        SMCLog.info("Fixed size " + s1 + ": " + aw + " " + ah);
-                                    } else {
-                                        float rw = -1F;
-                                        float rh = -1F;
-
-                                        try {
-                                            rw = Float.parseFloat(values[0]);
-                                            rh = Float.parseFloat(values[1]);
-                                        } catch (NumberFormatException ex) {}
-
-                                        if (rw >= 0F && rh >= 0F) { // 这里也不做一下是不是1.0的判断= =虽然正常来讲没啥光影作者会设1.0吧
-                                            isRelative[i] = true;
-                                            bufferSize[i] = new float[] { rw, rh };
-                                            SMCLog.info("Relative size " + s1 + ": " + rw + " " + rh);
-                                        } else {
-                                            SMCLog.severe("Invalid buffer size: " + keyStr + "=" + value);
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            SMCLog.severe("Invalid buffer name: " + keyStr);
+                        if (!reported) {
+                            reported = true;
+                            SMCLog.info("Per-buffer sizes are not supported: " + keyStr + "=" + value
+                                    + " and any others are ignored; every buffer runs at full resolution.");
                         }
                     }
                 }
@@ -2082,6 +2502,29 @@ public class Hook extends DummyModContainer {
 
         // Shaders.init
         public static void updateProgramSize(Program program) {
+            // Iris-style draw targets have to be recovered from the source, because the
+            // parser hook that would do it never runs for a pack without DRAWBUFFERS.
+            MoreBuffers.loadRenderTargets(program);
+
+            // Only programs that actually draw something are size checked.
+            //
+            // The MoreStages hook reserves capacity by creating a hundred deferred programs
+            // per stage, of which a pack uses a handful. A program that was never given a
+            // source has no draw buffer settings, so without this guard it falls through to
+            // the default "every used buffer" list, which then looks inconsistent as soon as
+            // the pack gives any one buffer its own size. photon does exactly that: colortex4
+            // is a fixed 192x108, so every reserved-but-empty program reported "draws to
+            // buffers with different sizes", roughly two hundred log lines, and the genuine
+            // message was buried.
+            //
+            // getId() is zero for a program that has no compiled object, which is the same
+            // test MoreStages already uses to decide whether a reserved slot is in use.
+            boolean inUse = program.getId() != 0 || ComputeShader.hasComputes(program);
+
+            if (!inUse) {
+                return;
+            }
+
             if (program.getProgramStage() == ProgramStage.COMPOSITE && !program.getName().equals("final")
                     || program.getProgramStage() == ProgramStage.DEFERRED && !program.getName().startsWith("shadowcomp")) {
                 int i = 0;
@@ -2279,8 +2722,10 @@ public class Hook extends DummyModContainer {
         }
 
         // BuilderBuffer.putPosition
-        public static void setMidBlock(BufferBuilder builder) {
-            int size = builder.getVertexFormat().getSize();
+        public static void setMidBlock(VertexBuffer builder) {
+            // Bytes, because the test below compares against 56, which is the byte size of the
+            // block vertex format, and every offset here is a ByteBuffer offset.
+            int size = builder.getVertexFormat().getIntegerSize() * 4;
 
             if (size == 56) {
                 int count = builder.getVertexCount() - 4;
@@ -3174,7 +3619,15 @@ public class Hook extends DummyModContainer {
         }
 
         public static boolean hasComputes(Program program) {
-            return computes.get(program).length > 0;
+            // A program with no entry in the map has no compute shaders. The upstream version
+            // read computes.get(program).length directly, which dereferences null for every
+            // program that never had computes registered, and that is most of them. It went
+            // unnoticed until a caller started asking about arbitrary programs rather than
+            // only the ones already known to have computes, and the result was a
+            // NullPointerException on the first frame of a world.
+            ComputeProgram[] registered = computes.get(program);
+
+            return registered != null && registered.length > 0;
         }
 
         private static class ComputeProgram extends Program {
@@ -3361,12 +3814,22 @@ public class Hook extends DummyModContainer {
         public static void registerExpressions(ShaderExpressionResolver resolver) {
             resolver.registerExpression("playerMood", new IExpressionFloat() {
                 @Override
+                public ExpressionType getExpressionType() {
+                    return ExpressionType.FLOAT;
+                }
+
+                @Override
                 public float eval() {
                     return uniformPlayerMood.getValue();
                 }
             });
 
             resolver.registerExpression("biome_category", new IExpressionFloat() {
+
+                @Override
+                public ExpressionType getExpressionType() {
+                    return ExpressionType.FLOAT;
+                }
 
                 @Override
                 public float eval() {
@@ -3378,6 +3841,11 @@ public class Hook extends DummyModContainer {
             });
 
             resolver.registerExpression("biome_precipitation", new IExpressionFloat() {
+
+                @Override
+                public ExpressionType getExpressionType() {
+                    return ExpressionType.FLOAT;
+                }
 
                 @Override
                 public float eval() {

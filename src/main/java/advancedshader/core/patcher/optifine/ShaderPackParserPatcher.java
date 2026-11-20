@@ -10,40 +10,33 @@ public class ShaderPackParserPatcher extends Patcher {
 
     @MethodPatch("resolveIncludes(Ljava/io/BufferedReader;Ljava/lang/String;Lnet/optifine/shaders/IShaderPack;ILjava/util/List;I)Ljava/io/BufferedReader;")
     public void resolveIncludes(MethodNode method) {
-        patch("替换着色器版本宏", method,
+        patch("replace the shader version macro", method,
                 ByteCode.InvokeStatic("net/optifine/shaders/config/ShaderMacros", "getFixedMacroLines", "()Ljava/lang/String;"),
                 inject(ByteCode.InvokeStatic(FORWARDFEATURES, "replaceShaderVersionMacro", "(Ljava/lang/String;)Ljava/lang/String;")));
 
-//        patch("Core Profile 版本转换", method,
-//                ByteCode.Label(),
-//                ByteCode.LineNumber(),
-//                inject(ByteCode.ALoad(12)),
-//                inject(ByteCode.InvokeStatic(COREPROFILE, "convertVersion", "(Ljava/lang/String;)Ljava/lang/String;")),
-//                inject(ByteCode.AStore(12)),
-//                ByteCode.New("java/lang/StringBuilder"),
-//                ByteCode.Dup(),
-//                ByteCode.InvokeSpecial("java/lang/StringBuilder", "<init>", "()V"),
-//                ByteCode.InvokeStatic("net/optifine/shaders/config/ShaderMacros", "getFixedMacroLines", "()Ljava/lang/String;"));
-
-//        LabelNode label = ByteCode.Label();
-//
-//        patch("Core Profile 兼容性转换", method,
-//                inject(ByteCode.ILoad(9)),
-//                inject(ByteCode.IfLessThanZero(label)),
-//                inject(ByteCode.ALoad(12)),
-//                inject(ByteCode.ALoad(10)),
-//                inject(ByteCode.ALoad(1)),
-//                inject(ByteCode.InvokeStatic(COREPROFILE, "convertCoreProfile", "(Ljava/lang/String;Ljava/util/Set;Ljava/lang/String;)Ljava/lang/String;")),
-//                inject(ByteCode.AStore(12)),
-//                inject(label),
-//                ByteCode.ALoad(8),
-//                ByteCode.ALoad(12),
-//                ByteCode.InvokeVirtual("java/io/CharArrayWriter", "write", "(Ljava/lang/String;)V"),
-//                ByteCode.Label(),
-//                ByteCode.LineNumber(),
-//                ByteCode.ALoad(8),
-//                ByteCode.Ldc("\n"),
-//                ByteCode.InvokeVirtual("java/io/CharArrayWriter", "write", "(Ljava/lang/String;)V"));
+        // Convert the assembled shader source to a core profile before OptiFine compiles it.
+        //
+        // This is the step that makes modern packs compile at all. A 1.16 pack writes GLSL
+        // 150+ and uses integer modulo and texelFetch, and OptiFine H5 compiles with a
+        // compatibility profile that rejects both:
+        //
+        //   0(19) : error C7548: '%' requires "#extension GL_EXT_gpu_shader4 : enable"
+        //   0(19) : error C7531: global function texelFetch2D requires ...
+        //
+        // Hook.CoreProfile already rewrites "#version 120" to "#version 150 compatibility" and
+        // maps the legacy gl_* attributes onto core-profile names. It was never called: the two
+        // upstream injections that would have called it target a G5 API (convertVersion and a
+        // three-argument convertCoreProfile) that does not exist in H5, so they had been
+        // commented out and every pack failed to link.
+        //
+        // The insertion point is the single place where resolveIncludes builds the reader it
+        // returns, immediately before its one areturn. The value on the stack is already a
+        // BufferedReader and the hook takes and returns one, so the stack shape is unchanged
+        // and no frame information is involved.
+        patch("convert the shader source to the core profile", method,
+                ByteCode.InvokeSpecial("java/io/BufferedReader", "<init>", "(Ljava/io/Reader;)V"),
+                inject(ByteCode.InvokeStatic(COREPROFILE, "convertCoreProfile",
+                        "(Ljava/io/BufferedReader;)Ljava/io/BufferedReader;")));
     }
 
     @MethodPatch("parseBlendStates(Ljava/util/Properties;)V")

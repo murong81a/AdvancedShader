@@ -120,6 +120,20 @@ public abstract class Patcher implements IClassTransformer {
             ClassNode node = new ClassNode();
             cr.accept(node, 0);
 
+            // A patch that cannot find its instruction sequence must not take the client
+            // down with it: this project's standing rule is that a failure disables only
+            // itself. The original upstream code rethrew here, which is correct when every
+            // sequence is known to exist, but during a port the sequences are exactly what
+            // is being validated, and a throw on the first mismatch hides all the others.
+            // So each method patch is attempted independently, and a method whose patch
+            // throws is rolled back to its original instruction list instead of discarding the
+            // whole class. Losing one method's edits is a local loss; losing the class throws
+            // away every other patch on it, including ones that had already applied cleanly.
+            // That is exactly what happened to ShadersRender: one anchor inside renderShadowMap
+            // no longer matched, and the terrain stage markers and the vertex attribute binding
+            // on the same class went with it.
+            boolean classFailed = false;
+
             try {
                 if (this.classPatch != null) {
                     LOGGER.debug(" - 执行类结构修补");
@@ -136,38 +150,93 @@ public abstract class Patcher implements IClassTransformer {
                         } else {
                             LOGGER.debug(" - 执行字节码修补，目标方法：{} ({})", key, methodPatch.getName());
                         }
-                        methodPatch.invoke(this, method);
-                        this.methodPatched.put(key, Boolean.TRUE);
+
+                        // Snapshot the instruction list so a failure can be undone. The nodes
+                        // themselves are reused: they are only removed from the list, never
+                        // mutated, so re-adding them restores the original sequence exactly.
+                        AbstractInsnNode[] snapshot = method.instructions.toArray();
+
+                        try {
+                            methodPatch.invoke(this, method);
+                            this.methodPatched.put(key, Boolean.TRUE);
+                        } catch (Throwable e) {
+                            Throwable cause = e instanceof java.lang.reflect.InvocationTargetException
+                                    && e.getCause() != null ? e.getCause() : e;
+
+                            method.instructions.clear();
+
+                            for (AbstractInsnNode insn : snapshot) {
+                                method.instructions.add(insn);
+                            }
+
+                            LOGGER.error(" - 修补 {} 的方法 {} 失败，已回滚该方法，其余方法保留：{}",
+                                    this.target, key, String.valueOf(cause));
+                        }
                     }
                 }
 
                 for (String key : this.methodPatched.keySet()) {
                     if (!this.methodPatched.get(key)) {
-                        LOGGER.warn(" - 未执行目标为 {} 的方法修补程式", key);
+                        // Two different situations produce this line and they mean opposite
+                        // things during a port: the class never declared a method with this
+                        // descriptor, or it did and the patch handler threw while looking for
+                        // its instructions. Only the second is a tuning problem.
+                        boolean declared = false;
+
+                        for (MethodNode m : node.methods) {
+                            if ((m.name + m.desc).equals(key)) {
+                                declared = true;
+                                break;
+                            }
+                        }
+
+                        if (declared) {
+                            LOGGER.warn(" - method {} exists but its patch did not complete", key);
+                        } else {
+                            LOGGER.warn(" - the class does not declare {}", key);
+
+                            String missingName = key.substring(0, key.indexOf('('));
+
+                            for (MethodNode m : node.methods) {
+                                if (m.name.equals(missingName)) {
+                                    LOGGER.warn("   - the class declares {} instead", m.name + m.desc);
+                                }
+                            }
+                        }
                     }
                 }
 
                 LOGGER.debug("======================");
 
-                ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS | ClassWriter.COMPUTE_FRAMES);
+                if (classFailed) {
+                    LOGGER.error(" - 跳过类 {} 的全部修补，因为它至少有一处未能匹配", this.target);
+                    return basicClass;
+                }
+
+                // The writer never recomputes stack frames. This is a deliberate constraint,
+                // not an oversight:
+                //
+                // ASM 5's COMPUTE_FRAMES is pathological on the largest methods in this game.
+                // RenderGlobal's entity pass is one of them, and computing its frames threw
+                // OutOfMemoryError ("GC overhead limit exceeded" inside Frame.b) at a six
+                // gigabyte heap. Because frame computation happens while the class is being
+                // written, that failure discarded every patch on the class at once, including
+                // ones that had already applied cleanly. The visible result was a world with
+                // sky and clouds but no terrain, which looks like a shader bug and is not.
+                //
+                // COMPUTE_MAXS only recalculates max stack and max locals, which cannot fail
+                // this way. The cost is that a patch may not introduce a new branch target:
+                // every injected jump must land on an existing LabelNode whose frame already
+                // exists, and the verifier supplies frames from the original code. All the
+                // patcher code follows that rule; RenderGlobalPatcher documents it explicitly
+                // in the place where a gate would otherwise have been written as a jump.
+                ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
                 node.accept(cw);
                 basicClass = cw.toByteArray();
             } catch (Throwable e) {
-                RuntimeException ex = new RuntimeException("发生严重故障，模组无法正常运作，请检查模组冲突情况。", e);
-
-                LOGGER.catching(ex);
-                throw ex;
+                LOGGER.error(" - 修补类 {} 时发生故障，该类将保持原样", this.target, e);
+                return basicClass;
             }
-
-//          try {
-//              File f = new File("asmdebug/" + name.replace('.', '/') + ".class");
-//              f.getParentFile().mkdirs();
-//              FileOutputStream fos = new FileOutputStream(f);
-//              fos.write(basicClass);
-//              fos.close();
-//          } catch (IOException e) {
-//              e.printStackTrace();
-//          }
         }
 
         return basicClass;

@@ -688,48 +688,11 @@ public class ShadersPatcher extends Patcher {
                 inject(ByteCode.InvokeStatic(COMPUTESHADER, "deleteComputes", "(Lnet/optifine/shaders/Program;)V")));
     }
 
-    @MethodPatch("beginRender(Lbib;FJ)V")
-    public void beginRender(MethodNode method) {
-        LabelNode label1 = ByteCode.Label();
-
-        patch("增加帧缓冲纹理绑定判断（colortex8-16与size.buffer）", method,
-                ByteCode.IConst(0),
-                ByteCode.IStore(5),
-                ByteCode.Label(),
-                ByteCode.Frame(),
-                ByteCode.ILoad(5),
-                ByteCode.GetStatic("net/optifine/shaders/Shaders", "usedColorBuffers", "I"),
-                ByteCode.IfIntGreaterEqual(null),
-                ByteCode.Label(),
-                ByteCode.LineNumber(),
-                inject(ByteCode.ILoad(5)),
-                inject(ByteCode.InvokeStatic(BUFFERSIZE, "shouldBindForSetup", "(I)Z")),
-                inject(ByteCode.IfZero(label1)),
-                ByteCode.Ldc(GL30.GL_FRAMEBUFFER),
-                ByteCode.Ldc(GL30.GL_COLOR_ATTACHMENT0),
-                ByteCode.ILoad(5),
-                ByteCode.IAdd(),
-                ByteCode.SIPush(GL11.GL_TEXTURE_2D),
-                ByteCode.GetStatic("net/optifine/shaders/Shaders", "dfbColorTexturesFlip", "Lnet/optifine/shaders/FlipTextures;"),
-                ByteCode.ILoad(5),
-                ByteCode.InvokeVirtual("net/optifine/shaders/FlipTextures", "getA", "(I)I"),
-                ByteCode.IConst(0),
-                ByteCode.InvokeStatic("org/lwjgl/opengl/EXTFramebufferObject", "glFramebufferTexture2DEXT", "(IIIII)V"),
-                inject(label1),
-                ByteCode.Label(),
-                ByteCode.LineNumber(),
-                ByteCode.Inc(5, 1));
-
-        patch("重置渲染阶段配置", method,
-                ByteCode.Label(),
-                ByteCode.LineNumber(),
-                ByteCode.Frame(),
-                inject(ByteCode.GetStatic(RENDERSTAGE, "NONE", "Ladvancedshader/Hook$RenderStage;")),
-                inject(ByteCode.InvokeStatic(RENDERSTAGE, "setRenderStage", "(Ladvancedshader/Hook$RenderStage;)V")),
-                ByteCode.Ldc("end beginRender"),
-                ByteCode.InvokeStatic("net/optifine/shaders/Shaders", "checkGLError", "(Ljava/lang/String;)I"));
-    }
-
+// beginRender: no patch. OptiFine H5 already performs the per colour-buffer setup
+    // this patch added to G5 (it binds each used colour buffer's attachment before the
+    // gbuffer pass), so there is no sequence here to rewrite. Verified by disassembling
+    // Shaders.beginRender in H5: the body begins with checkGLError and checkWorldChanged
+    // and contains no iconst_0 / istore 5 loop over usedColorBuffers.
     @MethodPatch("clearRenderBuffer()V")
     public void clearRenderBuffer(MethodNode method) {
         // 防止1286
@@ -979,7 +942,7 @@ public class ShadersPatcher extends Patcher {
                 ByteCode.ILoad(4),
                 ByteCode.IALoad(),
                 ByteCode.IAdd(),
-                ByteCode.InvokeStatic("bus", "g", "(I)V"),
+                ByteCode.InvokeStatic("bob", "g", "(I)V"),
                 ByteCode.Label(),
                 ByteCode.LineNumber(),
                 remove(ByteCode.GetStatic("net/optifine/shaders/Shaders", "dfbColorTexturesFlip", "Lnet/optifine/shaders/FlipTextures;")),
@@ -1555,13 +1518,13 @@ public class ShadersPatcher extends Patcher {
         patch("设置阴影ping-pong缓冲区与格式 第二部分", method,
                 inject(ByteCode.InvokeStatic(MORESTAGES, "setupShadowFlipBuffer", "()V")),
                 ByteCode.IConst(0),
-                ByteCode.InvokeStatic("bus", "i", "(I)V"));
+                ByteCode.InvokeStatic("bob", "i", "(I)V"));
     }
 
     @MethodPatch("updateAlphaBlend(Lnet/optifine/shaders/Program;Lnet/optifine/shaders/Program;)V")
     public void updateAlphaBlend(MethodNode method) {
         patch("应用blend.<program>.<buffer>配置 第一部分", method,
-                ByteCode.InvokeStatic("bus", "unlockBlend", "()V"),
+                ByteCode.InvokeStatic("bob", "unlockBlend", "()V"),
                 ByteCode.Label(),
                 ByteCode.LineNumber(),
                 ByteCode.Frame(),
@@ -1714,34 +1677,12 @@ public class ShadersPatcher extends Patcher {
                 ByteCode.InvokeStatic("net/optifine/shaders/Shaders", "setProgramUniformMatrix4ARB", "(Lnet/optifine/shaders/uniform/ShaderUniformM4;ZLjava/nio/FloatBuffer;)V"));
     }
 
-    @MethodPatch("getCameraPosition()Let;")
-    public void getCameraPosition(MethodNode method) {
-        patch("相机坐标修正", method,
-                ByteCode.GetStatic("net/optifine/shaders/Shaders", "cameraPositionX", "D"),
-                inject(ByteCode.GetStatic("net/optifine/shaders/Shaders", "cameraOffsetX", "I")),
-                inject(ByteCode.I2D()),
-                inject(ByteCode.DAdd()),
-                ByteCode.GetStatic("net/optifine/shaders/Shaders", "cameraPositionY", "D"),
-                ByteCode.GetStatic("net/optifine/shaders/Shaders", "cameraPositionZ", "D"),
-                inject(ByteCode.GetStatic("net/optifine/shaders/Shaders", "cameraOffsetZ", "I")),
-                inject(ByteCode.I2D()),
-                inject(ByteCode.DAdd()));
-    }
-
-    @MethodPatch("setEntityId(Lvg;)V")
-    public void setEntityId(MethodNode method) {
-        patch("高版本实体ID映射以及闪电实体ID", method,
-                ByteCode.ILoad(1),
-                ByteCode.InvokeStatic("net/optifine/shaders/EntityAliases", "getEntityAliasId", "(I)I"),
-                inject(ByteCode.ALoad(0)),
-                inject(ByteCode.InvokeStatic(FORWARDFEATURES, "getEntityAliasID", "(ILvg;)I")),
-                ByteCode.IStore(2),
-                ByteCode.Label(),
-                ByteCode.LineNumber(),
-                ByteCode.ILoad(2),
-                inject(ByteCode.InvokeStatic(FORWARDFEATURES, "isAllowNegative", "(I)I")));
-    }
-
+// getCameraPosition: no patch. H5 already returns BlockPos and already adds
+    // cameraOffsetX and cameraOffsetZ to the camera position before constructing it,
+    // which is exactly what this patch added to G5.
+// setEntityId: no patch. H5 already takes an Entity and already resolves the id via
+    // EntityUtils.getEntityIdByClass, which is the forward-compatible id mapping this
+    // patch added to G5.
     @MethodPatch("beginSky()V")
     public void beginSky(MethodNode method) {
         patch("增加SKY渲染阶段配置", method,
@@ -1829,9 +1770,38 @@ public class ShadersPatcher extends Patcher {
 
     @MethodPatch("endHand()V")
     public void endHand(MethodNode method) {
-        patch("重置渲染阶段配置", method,
+        patch("reset the render stage marker", method,
                 inject(ByteCode.GetStatic(RENDERSTAGE, "NONE", "Ladvancedshader/Hook$RenderStage;")),
                 inject(ByteCode.InvokeStatic(RENDERSTAGE, "setRenderStage", "(Ladvancedshader/Hook$RenderStage;)V")),
+                method.instructions.getFirst());
+    }
+
+    /**
+     * Caps the colour attachment loop at what the context can actually attach.
+     *
+     * beginRender walks every used colour buffer and attaches each one to the main
+     * framebuffer. A pack that uses a high colortex index makes that loop run past the
+     * context's attachment limit, and every rejected attach raises GL_INVALID_OPERATION which
+     * nothing clears, so the error surfaces at checkGLError("end beginRender") on every frame.
+     *
+     * Two earlier placements were wrong and both are worth recording:
+     *
+     *   - clamping inside setupFrameBuffer ran too early. OptiFine recomputes
+     *     usedColorBuffers in createFragShader as programs compile, so the corrected value was
+     *     overwritten and the loop still ran to the declared count;
+     *   - replacing the field read inside the loop with a call to a clamp function changed what
+     *     the stackmap records about the owner class, and without frame recomputation that
+     *     produced "VerifyError: Expecting a stackmap frame at branch target".
+     *
+     * Frame recomputation is not available here: it exhausts the heap on this game's largest
+     * methods. So the clamp is a void call at the head of beginRender, which changes no type
+     * on the stack and therefore involves no frame information at all. It runs immediately
+     * before the loop it protects, after every value has settled.
+     */
+    @MethodPatch("beginRender(Lbcx;FJ)V")
+    public void beginRenderClamp(MethodNode method) {
+        patch("cap the colour attachment loop at the context limit", method,
+                inject(ByteCode.InvokeStatic(HOOK, "clampUsedColorBuffers", "()V")),
                 method.instructions.getFirst());
     }
 }

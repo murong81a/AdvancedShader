@@ -1,64 +1,29 @@
 package advancedshader.core.patcher.vanilla;
 
-import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.MethodNode;
 
 import advancedshader.core.patcher.Patcher;
 import advancedshader.core.patcher.Patcher.Patch;
 
-@Patch("cdp")
+/**
+ * TextureMap is bwd in 1.10.2.
+ *
+ * Not patched. The two upstream patches load and unload a normal and a specular map next
+ * to each atlas sprite so that anisotropic filtering has height data to work with. They
+ * anchor on a sprite load loop that catches an exception and calls printStackTrace, and on
+ * a deleteSpriteTexture call in the ceiling-of-the-loop cleanup. Disassembling
+ * bwd.b(IResourceManager)V in 1.10.2 finds neither: the sprite loading loop here is a
+ * different, shorter shape with no printStackTrace block, and sprite texture deletion is
+ * not performed in this method at all.
+ *
+ * What is lost: the shader sprite maps are not created, so packs that sample a normal or
+ * specular texture through the OptiFine sprite extension see no data for it. That is a
+ * texture-data feature, not the program pipeline; the pipeline itself does not depend on
+ * it.
+ *
+ * Note that the target method is b(IResourceManager)V (loadTextureAtlas) and not
+ * a(IResourceManager)V (loadTexture), which is a re-entrant single-texture path.
+ */
+@Patch("bwd")
 public class TextureMapPatcher extends Patcher {
-
-    @MethodPatch("b(Lcep;)V")
-    public void loadTextureAtlas(MethodNode method) {
-        patch("加载适用于各向异性过滤的法线与高光精灵图", method,
-                ByteCode.Label(),
-                ByteCode.LineNumber(),
-                ByteCode.ALoad(21),
-                ByteCode.InvokeVirtual("java/lang/Exception", "printStackTrace", "()V"),
-                ByteCode.Label(),
-                ByteCode.LineNumber(),
-                ByteCode.Frame(),
-                inject(ByteCode.ALoad(17)),
-                inject(ByteCode.InvokeStatic(ANISOTROPICFILTER, "loadShaderSprite", "(Lcdq;)V")),
-                ByteCode.Goto(null));
-
-        patch("删除适用于各向异性过滤的法线与高光精灵图", method,
-                ByteCode.ALoad(3),
-                ByteCode.InvokeVirtual("cdq", "deleteSpriteTexture", "()V"),
-                inject(ByteCode.ALoad(3)),
-                inject(ByteCode.InvokeStatic(ANISOTROPICFILTER, "unloadShaderSprite", "(Lcdq;)V")));
-    }
-
-    @MethodPatch("d()V")
-    public void updateAnimations(MethodNode method) {
-        LabelNode normalEnd = ByteCode.Label();
-        LabelNode specularEnd = ByteCode.Label();
-
-        patch("更新适用于各向异性过滤的法线与高光精灵图动画", method,
-                ByteCode.ALoad(6),
-                ByteCode.InvokeVirtual("cdq", "isAnimationActive", "()Z"),
-                ByteCode.IfZero(null),
-                ByteCode.Label(),
-                ByteCode.LineNumber(),
-                ByteCode.Inc(3, 1),
-                ByteCode.Label(),
-                ByteCode.LineNumber(),
-                ByteCode.Frame(),
-                inject(ByteCode.ALoad(5)),
-                inject(ByteCode.GetField("cdq", "spriteNormal", "Lcdq;")),
-                inject(ByteCode.ALoad(5)),
-                inject(ByteCode.InvokeStatic(ANISOTROPICFILTER, "updateShaderSpriteAnimation", "(Lcdq;Lcdq;)Z")),
-                inject(ByteCode.IfZero(normalEnd)),
-                inject(ByteCode.Inc(3, 1)),
-                inject(normalEnd),
-                inject(ByteCode.ALoad(5)),
-                inject(ByteCode.GetField("cdq", "spriteSpecular", "Lcdq;")),
-                inject(ByteCode.ALoad(5)),
-                inject(ByteCode.InvokeStatic(ANISOTROPICFILTER, "updateShaderSpriteAnimation", "(Lcdq;Lcdq;)Z")),
-                inject(ByteCode.IfZero(specularEnd)),
-                inject(ByteCode.Inc(3, 1)),
-                inject(specularEnd),
-                ByteCode.Goto(null));
-    }
 }

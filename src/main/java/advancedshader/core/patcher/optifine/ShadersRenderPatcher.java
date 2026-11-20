@@ -11,7 +11,7 @@ import advancedshader.core.patcher.Patcher.Patch;
 @Patch("net.optifine.shaders.ShadersRender")
 public class ShadersRenderPatcher extends Patcher {
 
-    @MethodPatch("renderShadowMap(Lbuq;IFJ)V")
+    @MethodPatch("renderShadowMap(Lbnz;IFJ)V")
     public void renderShadowMap(MethodNode method) {
         LabelNode label = (LabelNode) patch("添加shadowTerrain配置 第一部分", method,
                 ByteCode.Ldc("shadow terrain cutout"),
@@ -20,26 +20,26 @@ public class ShadersRenderPatcher extends Patcher {
                 ByteCode.Label(),
                 ByteCode.LineNumber(),
                 ByteCode.ALoad(5),
-                ByteCode.InvokeVirtual("bib", "N", "()Lcdr;"),
-                ByteCode.GetStatic("cdp", "g", "Lnf;"),
-                ByteCode.InvokeVirtual("cdr", "b", "(Lnf;)Lcds;"),
-                ByteCode.InvokeInterface("cds", "a", "()V"),
+                ByteCode.InvokeVirtual("bcx", "N", "()Lbwf;"),
+                ByteCode.GetStatic("bwd", "g", "Lkn;"),
+                ByteCode.InvokeVirtual("bwf", "b", "(Lkn;)Lbwg;"),
+                ByteCode.InvokeInterface("bwg", "a", "()V"),
                 collect(ByteCode.Label()))[0];
 
         patch("添加shadowTerrain配置 第二部分", method,
                 inject(ByteCode.GetStatic(HOOK, "shaderPackShadowTerrain", "Lnet/optifine/shaders/config/PropertyDefaultTrueFalse;")),
                 inject(ByteCode.InvokeVirtual("net/optifine/shaders/config/PropertyDefaultTrueFalse", "isFalse", "()Z")),
                 inject(ByteCode.IfNotZero(label)),
-                ByteCode.InvokeStatic("bus", "d", "()V"),
+                ByteCode.InvokeStatic("bob", "d", "()V"),
                 ByteCode.Label(),
                 ByteCode.LineNumber(),
                 ByteCode.ALoad(6),
-                ByteCode.GetStatic("amm", "a", "Lamm;"),
+                ByteCode.GetStatic("ahv", "a", "Lahv;"),
                 ByteCode.FLoad(2),
                 ByteCode.F2D(),
                 ByteCode.IConst(2),
                 ByteCode.ALoad(9),
-                ByteCode.InvokeVirtual("buy", "a", "(Lamm;DILvg;)I"),
+                ByteCode.InvokeVirtual("boh", "a", "(Lahv;DILrw;)I"),
                 ByteCode.Pop());
 
         patch("配置阴影纹理glClear", method,
@@ -64,12 +64,12 @@ public class ShadersRenderPatcher extends Patcher {
                 ByteCode.Label(),
                 ByteCode.LineNumber(),
                 remove(ByteCode.ALoad(5)),
-                remove(ByteCode.GetField("bib", "t", "Lbid;")),
+                remove(ByteCode.GetField("bcx", "t", "Lbbz;")),
                 remove(ByteCode.IConst(1)),
-                remove(ByteCode.PutField("bid", "aw", "I")));
+                remove(ByteCode.PutField("bcz", "as", "I")));
     }
 
-    @MethodPatch("preRenderChunkLayer(Lamm;)V")
+    @MethodPatch("preRenderChunkLayer(Lahv;)V")
     public void preRenderChunkLayer(MethodNode method) {
         patch("绑定at_midBlock顶点属性", method,
                 ByteCode.GetStatic("net/optifine/shaders/Shaders", "entityAttrib", "I"),
@@ -78,7 +78,7 @@ public class ShadersRenderPatcher extends Patcher {
                 inject(ByteCode.InvokeStatic("org/lwjgl/opengl/GL20", "glEnableVertexAttribArray", "(I)V")));
     }
 
-    @MethodPatch("postRenderChunkLayer(Lamm;)V")
+    @MethodPatch("postRenderChunkLayer(Lahv;)V")
     public void postRenderChunkLayer(MethodNode method) {
         patch("解绑at_midBlock顶点属性", method,
                 ByteCode.GetStatic("net/optifine/shaders/Shaders", "entityAttrib", "I"),

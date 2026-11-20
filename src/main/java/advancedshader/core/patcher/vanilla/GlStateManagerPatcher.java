@@ -8,7 +8,7 @@ import org.objectweb.asm.tree.ClassNode;
 import advancedshader.core.patcher.Patcher;
 import advancedshader.core.patcher.Patcher.Patch;
 
-@Patch("bus")
+@Patch("bob")
 public class GlStateManagerPatcher extends Patcher {
 
     @ClassPatch
@@ -21,9 +21,9 @@ public class GlStateManagerPatcher extends Patcher {
         Label checkEnd = new Label();
 
         m.visitIntInsn(ByteCode.SIPUSH, GL11.GL_BLEND);
-        m.visitFieldInsn(ByteCode.GETSTATIC, "bus", "g", "Lbus$b;");
-        m.visitFieldInsn(ByteCode.GETFIELD, "bus$b", "a", "Lbus$c;");
-        m.visitFieldInsn(ByteCode.GETFIELD, "bus$c", "b", "Z");
+        m.visitFieldInsn(ByteCode.GETSTATIC, "bob", "g", "Lbob$b;");
+        m.visitFieldInsn(ByteCode.GETFIELD, "bob$b", "a", "Lbob$c;");
+        m.visitFieldInsn(ByteCode.GETFIELD, "bob$c", "b", "Z");
         m.visitJumpInsn(ByteCode.IFEQ, disable);
         m.visitMethodInsn(ByteCode.INVOKESTATIC, "org/lwjgl/opengl/GL11", "glEnable", "(I)V", false);
         m.visitJumpInsn(ByteCode.GOTO, checkEnd);
@@ -31,15 +31,15 @@ public class GlStateManagerPatcher extends Patcher {
         m.visitMethodInsn(ByteCode.INVOKESTATIC, "org/lwjgl/opengl/GL11", "glDisable", "(I)V", false);
         m.visitLabel(checkEnd);
 
-        m.visitFieldInsn(ByteCode.GETSTATIC, "bus", "g", "Lbus$b;");
-        m.visitFieldInsn(ByteCode.GETFIELD, "bus$b", "b", "I");
-        m.visitFieldInsn(ByteCode.GETSTATIC, "bus", "g", "Lbus$b;");
-        m.visitFieldInsn(ByteCode.GETFIELD, "bus$b", "c", "I");
-        m.visitFieldInsn(ByteCode.GETSTATIC, "bus", "g", "Lbus$b;");
-        m.visitFieldInsn(ByteCode.GETFIELD, "bus$b", "d", "I");
-        m.visitFieldInsn(ByteCode.GETSTATIC, "bus", "g", "Lbus$b;");
-        m.visitFieldInsn(ByteCode.GETFIELD, "bus$b", "e", "I");
-        m.visitMethodInsn(ByteCode.INVOKESTATIC, "cii", "c", "(IIII)V", false);
+        m.visitFieldInsn(ByteCode.GETSTATIC, "bob", "g", "Lbob$b;");
+        m.visitFieldInsn(ByteCode.GETFIELD, "bob$b", "b", "I");
+        m.visitFieldInsn(ByteCode.GETSTATIC, "bob", "g", "Lbob$b;");
+        m.visitFieldInsn(ByteCode.GETFIELD, "bob$b", "c", "I");
+        m.visitFieldInsn(ByteCode.GETSTATIC, "bob", "g", "Lbob$b;");
+        m.visitFieldInsn(ByteCode.GETFIELD, "bob$b", "d", "I");
+        m.visitFieldInsn(ByteCode.GETSTATIC, "bob", "g", "Lbob$b;");
+        m.visitFieldInsn(ByteCode.GETFIELD, "bob$b", "e", "I");
+        m.visitMethodInsn(ByteCode.INVOKESTATIC, "caf", "c", "(IIII)V", false);
 
         m.visitInsn(ByteCode.RETURN);
 

@@ -5,24 +5,24 @@ import org.objectweb.asm.tree.MethodNode;
 import advancedshader.core.patcher.Patcher;
 import advancedshader.core.patcher.Patcher.Patch;
 
-@Patch("bxr")
+/**
+ * RenderChunk is bqy in 1.10.2, the same official name it has in 1.12.2.
+ *
+ * The upstream 1.12.2 patcher also patched `fixBlockLayer(LeafBlockState, BlockRenderLayer)`,
+ * a method that does not exist in 1.10.2 at all: the tripwire render layer was converted in
+ * that version's BlockRenderLayer enum handling instead. That patch is therefore not ported,
+ * which is why this class carries only the modelview patch.
+ */
+@Patch("bqy")
 public class RenderChunkPatcher extends Patcher {
 
-    @MethodPatch("fixBlockLayer(Lawt;Lamm;)Lamm;")
-    public void fixBlockLayer(MethodNode method) {
-        patch("修改绊线方块的渲染类型为Tripwire", method,
-                inject(ByteCode.ALoad(1)),
-                inject(ByteCode.ALoad(2)),
-                inject(ByteCode.InvokeStatic(FORWARDFEATURES, "replaceRenderLayer", "(Lawt;Lamm;)Lamm;")), // 相信我，铁驭（这里混不混淆无所谓的= =）
-                inject(ByteCode.AStore(2)),
-                method.instructions.getFirst());
-    }
-
+    // modelviewMatrix is field k in both versions, and GlStateManager.multMatrix is a(FloatBuffer)V,
+    // so the instruction sequence this matches is identical to the upstream 1.12.2 one.
     @MethodPatch("g()V")
     public void multModelviewMatrix(MethodNode method) {
-        patch("移除意味不明的区块缩放（可能影响光追）", method,
+        patch("remove the unexplained chunk scale (may affect shadow rays)", method,
                 remove(ByteCode.ALoad(0)),
-                remove(ByteCode.GetField("bxr", "k", "Ljava/nio/FloatBuffer;")),
-                remove(ByteCode.InvokeStatic("bus", "a", "(Ljava/nio/FloatBuffer;)V")));
+                remove(ByteCode.GetField("bqy", "k", "Ljava/nio/FloatBuffer;")),
+                remove(ByteCode.InvokeStatic("bob", "a", "(Ljava/nio/FloatBuffer;)V")));
     }
 }

@@ -5,7 +5,7 @@ import org.objectweb.asm.tree.MethodNode;
 import advancedshader.core.patcher.Patcher;
 import advancedshader.core.patcher.Patcher.Patch;
 
-@Patch("bjd")
+@Patch("bdu")
 public class GuiOverlayDebugPatcher extends Patcher {
 
     @MethodPatch("b()Ljava/util/List;")

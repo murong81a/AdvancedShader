@@ -5,3 +5,6 @@
 bin
 build
 dists
+run
+tmp
+*.class
